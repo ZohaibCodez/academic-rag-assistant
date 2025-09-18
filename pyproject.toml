@@ -1,0 +1,14 @@
+[project]
+name = "academic-rag-assistant"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=0.3.27",
+    "langchain-google-genai>=2.1.12",
+    "langchain-pinecone>=0.2.12",
+    "openai-agents>=0.3.0",
+    "python-dotenv>=1.1.1",
+    "streamlit>=1.49.1",
+]
