@@ -5,11 +5,14 @@
 ![Python](https://img.shields.io/badge/python-v3.12+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/streamlit-latest-red.svg)
 ![LangChain](https://img.shields.io/badge/langchain-latest-green.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![GitHub Stars](https://img.shields.io/github/stars/ZohaibCodez/academic-rag-assistant.svg)](https://github.com/ZohaibCodez/academic-rag-assistant/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/ZohaibCodez/academic-rag-assistant.svg)](https://github.com/ZohaibCodez/academic-rag-assistant/network)
+[![GitHub Watchers](https://img.shields.io/github/watchers/ZohaibCodez/academic-rag-assistant.svg)](https://github.com/ZohaibCodez/academic-rag-assistant/watchers)
+[![GitHub Contributors](https://img.shields.io/github/contributors/ZohaibCodez/academic-rag-assistant.svg)](https://github.com/ZohaibCodez/academic-rag-assistant/graphs/contributors)
 [![Issues](https://img.shields.io/github/issues/ZohaibCodez/academic-rag-assistant.svg)](https://github.com/ZohaibCodez/academic-rag-assistant/issues)
 ![Last Commit](https://img.shields.io/github/last-commit/ZohaibCodez/academic-rag-assistant)
 [![Live Demo](https://img.shields.io/badge/demo-online-green.svg)](https://academic-rag-assistant.streamlit.app)
-
 ## 🎯 Overview
 
 Academic RAG Assistant is an intelligent tutoring system that transforms your course textbooks into an interactive AI conversation partner. Using advanced agentic RAG architecture, it provides contextual answers from your specific academic materials across multiple subjects including Linear Algebra, Discrete Structures, and Calculus & Analytical Geometry.
