@@ -1,9 +1,13 @@
 import asyncio
 from datetime import datetime
 import os
+import logging
+import sys
+from typing import Optional, Dict, Any
 from agents import (
     Agent,
     OpenAIChatCompletionsModel,
+    RunResultStreaming,
     Runner,
     SQLiteSession,
     function_tool,
@@ -11,9 +15,9 @@ from agents import (
 from agents.memory import openai_conversations_session, session
 from dotenv import load_dotenv
 from langchain.retrievers import MultiQueryRetriever
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings  # Fixed: Use only one import
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.runnables import (
     RunnableLambda,
     RunnableParallel,
@@ -23,8 +27,50 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai.llms import GoogleGenerativeAI
 from langchain_pinecone.vectorstores import Pinecone, PineconeVectorStore
 from openai import AsyncOpenAI
+from openai.types.responses import ResponseTextDeltaEvent
 import streamlit as st
 from langchain_core.output_parsers import StrOutputParser
+
+
+# Configure logging
+def setup_logging():
+    """Setup logging configuration"""
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    # Create logs directory if it doesn't exist
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.FileHandler(f'logs/app_{datetime.now().strftime("%Y%m%d")}.log'),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+    # Set specific loggers
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("langchain").setLevel(logging.WARNING)
+    logging.getLogger("pinecone").setLevel(logging.WARNING)
+
+    return logging.getLogger(__name__)
+
+
+# Initialize logger
+logger = setup_logging()
+
+# User-friendly error messages
+ERROR_MESSAGES = {
+    "api_key_invalid": "❌ There seems to be an issue with your API key. Please check if it's correct and try again.",
+    "connection_error": "🌐 Unable to connect to the service. Please check your internet connection and try again.",
+    "retrieval_error": "📚 I'm having trouble accessing the course materials right now. Please try again in a moment.",
+    "processing_error": "🤖 I encountered an issue while processing your request. Please try rephrasing your question.",
+    "initialization_error": "⚙️ The assistant is having trouble starting up. Please refresh the page and try again.",
+    "general_error": "😅 Something unexpected happened. Please try again, and if the problem persists, contact support.",
+}
 
 load_dotenv()
 
@@ -39,11 +85,22 @@ except RuntimeError:
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
-# Validate API keys
-if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY environment variable is not set")
-if not PINECONE_API_KEY:
-    raise ValueError("PINECONE_API_KEY environment variable is not set")
+
+# Validate API keys with better error handling
+def validate_api_keys():
+    """Validate required API keys"""
+    try:
+        if not GOOGLE_API_KEY:
+            logger.error("GOOGLE_API_KEY environment variable is not set")
+            return False, "Google API key is missing"
+        if not PINECONE_API_KEY:
+            logger.error("PINECONE_API_KEY environment variable is not set")
+            return False, "Pinecone API key is missing"
+        return True, "API keys validated"
+    except Exception as e:
+        logger.error(f"Error validating API keys: {str(e)}")
+        return False, "Error validating API keys"
+
 
 # Streamlit configuration
 st.set_page_config(
@@ -53,7 +110,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS
+# Custom CSS (keeping your existing styles)
 st.markdown(
     """
 <style>
@@ -234,11 +291,19 @@ if "retrievers" not in st.session_state:
 def initialize_embeddings():
     """Initialize lightweight embeddings model (cached for performance)"""
     try:
-        return HuggingFaceEmbeddings(
+        logger.info("Initializing HuggingFace embeddings model")
+        embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
+        logger.info("Successfully initialized embeddings model")
+        return embeddings
+    except ImportError as e:
+        logger.error(f"Failed to import required libraries for embeddings: {str(e)}")
+        st.error(ERROR_MESSAGES["initialization_error"])
+        return None
     except Exception as e:
-        st.error(f"Failed to initialize embeddings: {str(e)}")
+        logger.error(f"Failed to initialize embeddings: {str(e)}")
+        st.error(ERROR_MESSAGES["initialization_error"])
         return None
 
 
@@ -246,55 +311,71 @@ def initialize_embeddings():
 def initialize_pinecone():
     """Initialize Pinecone connection (cached for performance)"""
     try:
+        logger.info("Initializing Pinecone connection")
         pc = Pinecone(api_key=PINECONE_API_KEY)
+        logger.info("Successfully initialized Pinecone connection")
         return pc
     except Exception as e:
-        st.error(f"Failed to initialize Pinecone: {str(e)}")
+        logger.error(f"Failed to initialize Pinecone: {str(e)}")
+        st.error(ERROR_MESSAGES["connection_error"])
         return None
 
 
 @st.cache_resource
 def setup_vector_store():
     """Setup vector store connections with error handling"""
-    embeddings = initialize_embeddings()
-    if not embeddings:
-        return None
-
-    index_name = "semester-books"
-    vector_stores = {}
-    subjects = [
-        "linear_algebra",
-        "discrete_structures",
-        "calculas_&_analytical_geometry",
-    ]
-
     try:
+        logger.info("Setting up vector stores")
+        embeddings = initialize_embeddings()
+        if not embeddings:
+            return None
+
+        index_name = "semester-books"
+        vector_stores = {}
+        subjects = [
+            "linear_algebra",
+            "discrete_structures",
+            "calculas_&_analytical_geometry",
+        ]
+
         for subject in subjects:
+            logger.info(f"Setting up vector store for subject: {subject}")
             vector_stores[subject] = PineconeVectorStore(
                 index_name=index_name, embedding=embeddings, namespace=subject
             )
+
+        logger.info("Successfully set up all vector stores")
         return vector_stores
     except Exception as e:
-        st.error(f"Failed to setup vector stores: {str(e)}")
+        logger.error(f"Failed to setup vector stores: {str(e)}")
+        st.error(ERROR_MESSAGES["initialization_error"])
         return None
 
 
 def format_docs(retrieved_docs):
     """Format retrieved documents for context"""
-    return "\n\n".join(doc.page_content for doc in retrieved_docs)
-
-
-def initialize_retrievers_with_model(model_name):
-    """Initialize retrievers with the selected model"""
-    if st.session_state.vector_stores is None:
-        st.session_state.vector_stores = setup_vector_store()
-
-    if st.session_state.vector_stores is None:
-        return False
-
     try:
+        return "\n\n".join(doc.page_content for doc in retrieved_docs)
+    except Exception as e:
+        logger.error(f"Error formatting documents: {str(e)}")
+        return "Error retrieving document content"
+
+
+def initialize_retrievers_with_model(model_name: str) -> bool:
+    """Initialize retrievers with the selected model"""
+    try:
+        logger.info(f"Initializing retrievers with model: {model_name}")
+
+        if st.session_state.vector_stores is None:
+            st.session_state.vector_stores = setup_vector_store()
+
+        if st.session_state.vector_stores is None:
+            logger.error("Vector stores not available")
+            return False
+
         # Initialize LLM with selected model
         llm = GoogleGenerativeAI(model=model_name)
+        logger.info(f"Successfully initialized LLM with model: {model_name}")
 
         # Create retrievers with the selected model
         st.session_state.retrievers = {
@@ -343,24 +424,23 @@ def initialize_retrievers_with_model(model_name):
             ),
             "llm": llm,
         }
+        logger.info("Successfully initialized all retrievers")
         return True
     except Exception as e:
-        st.error(f"Failed to initialize retrievers: {str(e)}")
+        logger.error(f"Failed to initialize retrievers: {str(e)}")
+        st.error(ERROR_MESSAGES["initialization_error"])
         return False
 
 
-def create_function_tools(model_name):
+def create_function_tools(model_name: str):
     """Create function tools with the selected model"""
+    logger.info(f"Creating function tools for model: {model_name}")
 
     @function_tool
     def answer_from_linear_algebra(query: str) -> str:
-        """
-        RAG tool for linear algebra
-        """
+        """RAG tool for linear algebra"""
         try:
-            print(
-                f"[Debug] answer_from_linear_algebra function call with query: {query}"
-            )
+            logger.info(f"Linear algebra query received: {query[:100]}...")
 
             parallel_chain = RunnableParallel(
                 {
@@ -399,23 +479,18 @@ def create_function_tools(model_name):
             )
             result = main_chain.invoke(query)
 
-            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            logger.info(f"Linear algebra response generated successfully")
             return result
 
         except Exception as e:
-            error_msg = f"Error in linear algebra query: {str(e)}"
-            print(f"[Error] {error_msg}")
-            return error_msg
+            logger.error(f"Error in linear algebra query: {str(e)}")
+            return "I'm having trouble accessing the Linear Algebra materials right now. Please try rephrasing your question or try again in a moment."
 
     @function_tool
     def answer_from_discrete_structures(query: str) -> str:
-        """
-        RAG tool for discrete structures
-        """
+        """RAG tool for discrete structures"""
         try:
-            print(
-                f"[Debug] answer_from_discrete_structures function call with query: {query}"
-            )
+            logger.info(f"Discrete structures query received: {query[:100]}...")
 
             parallel_chain = RunnableParallel(
                 {
@@ -454,21 +529,18 @@ def create_function_tools(model_name):
             )
             result = main_chain.invoke(query)
 
-            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            logger.info(f"Discrete structures response generated successfully")
             return result
 
         except Exception as e:
-            error_msg = f"Error in discrete structures query: {str(e)}"
-            print(f"[Error] {error_msg}")
-            return error_msg
+            logger.error(f"Error in discrete structures query: {str(e)}")
+            return "I'm having trouble accessing the Discrete Structures materials right now. Please try rephrasing your question or try again in a moment."
 
     @function_tool
     def answer_from_calana(query: str) -> str:
-        """
-        RAG tool for calculas and analytical geometry
-        """
+        """RAG tool for calculus and analytical geometry"""
         try:
-            print(f"[Debug] answer_from_calana function call with query: {query}")
+            logger.info(f"Calculus query received: {query[:100]}...")
 
             parallel_chain = RunnableParallel(
                 {
@@ -507,14 +579,14 @@ def create_function_tools(model_name):
             )
             result = main_chain.invoke(query)
 
-            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            logger.info(f"Calculus response generated successfully")
             return result
 
         except Exception as e:
-            error_msg = f"Error in calculus query: {str(e)}"
-            print(f"[Error] {error_msg}")
-            return error_msg
+            logger.error(f"Error in calculus query: {str(e)}")
+            return "I'm having trouble accessing the Calculus & Analytical Geometry materials right now. Please try rephrasing your question or try again in a moment."
 
+    logger.info("Successfully created all function tools")
     return [
         answer_from_linear_algebra,
         answer_from_discrete_structures,
@@ -522,9 +594,17 @@ def create_function_tools(model_name):
     ]
 
 
-def agent_initialization(model_name, _api_key):
+def agent_initialization(model_name: str, _api_key: str) -> Optional[Agent]:
     """Initialize agent with the selected model"""
     try:
+        logger.info(f"Initializing agent with model: {model_name}")
+
+        # Validate API key format
+        if not _api_key or len(_api_key) < 20:
+            logger.error("Invalid API key provided")
+            st.error(ERROR_MESSAGES["api_key_invalid"])
+            return None
+
         # Initialize OpenAI client for Gemini
         external_client = AsyncOpenAI(
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -584,24 +664,16 @@ def agent_initialization(model_name, _api_key):
             model=model,
         )
 
+        logger.info("Successfully initialized agent")
         return agent
     except Exception as e:
-        st.error(f"Failed to initialize agent: {str(e)}")
+        logger.error(f"Failed to initialize agent: {str(e)}")
+        st.error(ERROR_MESSAGES["initialization_error"])
         return None
 
 
-async def get_agent_response(agent, query: str) -> str:
-    """Get response from agent with error handling"""
-    try:
-        result = await Runner.run(agent, query, session=st.session_state.session_name)
-        return result.final_output
-    except Exception as e:
-        error_msg = f"Sorry, I encountered an error: {str(e)}"
-        print(f"[Error] {error_msg}")
-        return error_msg
-
-
 def handle_sidebar():
+    """Handle sidebar configuration and return selected model and API key"""
     with st.sidebar:
         st.header("🔑 Study Assistant")
 
@@ -628,6 +700,7 @@ def handle_sidebar():
                 else:
                     os.environ["GOOGLE_API_KEY"] = api_key
                     st.success("✅ API key set for this session")
+                    logger.info("API key successfully set")
             else:
                 st.info("💡 Enter your API key to start chatting")
 
@@ -662,6 +735,7 @@ def handle_sidebar():
             elif st.session_state.previous_model != selected_model:
                 st.session_state.agent_initialized = False
                 st.session_state.previous_model = selected_model
+                logger.info(f"Model changed to: {selected_model}")
 
         # Subjects Tab
         with tab2:
@@ -711,89 +785,175 @@ def handle_sidebar():
                     help="Download your conversation history",
                 )
 
-            # st.divider()
             if st.button("🗑️ Clear Chat", use_container_width=True):
                 st.session_state.messages = []
+                logger.info("Chat history cleared")
                 st.rerun()
 
     return selected_model, st.session_state.get("api_key")
 
 
-def main():
-    # Header
-    st.markdown(
-        '<h1 class="main-header">🎓 Academic RAG Assistant</h1>', unsafe_allow_html=True
-    )
+async def main():
+    """Main application function"""
+    streaming_speed = 0.05
+    try:
+        logger.info("Starting Academic RAG Assistant application")
 
-    selected_model, user_api_key = handle_sidebar()
-    chat_model = None
-    if user_api_key and selected_model:
-        # Ensure env var is set for the underlying client
-        os.environ["GOOGLE_API_KEY"] = user_api_key
-        chat_model = selected_model
-
-    # Main chat interface
-    st.subheader("💬 Chat with your Academic Assistant")
-
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if chat_model is None:
-        st.warning(
-            "Please enter your Google Gemini API key in the sidebar to start chatting."
+        # Header
+        st.markdown(
+            '<h1 class="main-header">🎓 Academic RAG Assistant</h1>',
+            unsafe_allow_html=True,
         )
-        return
 
-    # Initialize retrievers and agent
-    if not st.session_state.agent_initialized:
-        with st.spinner("Initializing Academic Assistant..."):
-            # Initialize retrievers with selected model
-            if initialize_retrievers_with_model(chat_model):
-                # Initialize agent with selected model
-                agent = agent_initialization(chat_model, user_api_key)
-                if agent:
-                    st.session_state.agent = agent
-                    st.session_state.agent_initialized = True
-                    st.success("✅ Academic Assistant ready!")
-                else:
-                    st.error("❌ Failed to initialize assistant")
+        selected_model, user_api_key = handle_sidebar()
+        chat_model = None
+        if user_api_key and selected_model:
+            # Ensure env var is set for the underlying client
+            os.environ["GOOGLE_API_KEY"] = user_api_key
+            chat_model = selected_model
+
+        # Main chat interface
+        st.subheader("💬 Chat with your Academic Assistant")
+
+        # Display chat messages
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        if chat_model is None:
+            st.warning(
+                "Please enter your Google Gemini API key in the sidebar to start chatting."
+            )
+            return
+
+        # Initialize retrievers and agent
+        if not st.session_state.agent_initialized:
+            with st.spinner("Initializing Academic Assistant..."):
+                try:
+                    logger.info("Initializing retrievers and agent")
+                    # Initialize retrievers with selected model
+                    if initialize_retrievers_with_model(chat_model):
+                        # Initialize agent with selected model
+                        agent = agent_initialization(chat_model, user_api_key)
+                        if agent:
+                            st.session_state.agent = agent
+                            st.session_state.agent_initialized = True
+                            st.success("✅ Academic Assistant ready!")
+                            logger.info("Academic Assistant successfully initialized")
+                        else:
+                            logger.error("Failed to initialize agent")
+                            st.error(
+                                "❌ Failed to initialize assistant. Please check your API key and try again."
+                            )
+                            return
+                    else:
+                        logger.error("Failed to initialize retrievers")
+                        st.error(
+                            "❌ Failed to initialize retrievers. Please refresh the page and try again."
+                        )
+                        return
+                except Exception as e:
+                    logger.error(f"Error during initialization: {str(e)}")
+                    st.error(ERROR_MESSAGES["initialization_error"])
                     return
-            else:
-                st.error("❌ Failed to initialize retrievers")
-                return
 
-    # Chat input
-    if prompt := st.chat_input(
-        "Ask me anything about your courses...", disabled=chat_model is None
-    ):
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        # Chat input
+        if prompt := st.chat_input(
+            "Ask me anything about your courses...", disabled=chat_model is None
+        ):
+            try:
+                # Validate input
+                if not prompt.strip():
+                    st.warning("Please enter a valid question.")
+                    return
 
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(prompt)
+                if len(prompt.strip()) < 3:
+                    st.warning("Please enter a more detailed question.")
+                    return
 
-        # Generate assistant response
-        with st.chat_message("assistant"):
-            with st.spinner("🤔 Thinking and searching through textbooks..."):
-                response = asyncio.run(
-                    get_agent_response(st.session_state.agent, prompt)
-                )
+                logger.info(f"User query received: {prompt[:100]}...")
 
-            st.markdown(response)
+                # Add user message
+                st.session_state.messages.append({"role": "user", "content": prompt})
 
-        # Add assistant message
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": response,
-            }
-        )
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
 
-        st.rerun()
+                # Generate assistant response
+                with st.chat_message("assistant"):
+                    with st.spinner("🤔 Thinking and searching through textbooks..."):
+                        message_placeholder = st.empty()
+                        full_response = ""
+                        
+                        try:
+                            logger.info(f"Processing query: {prompt[:100]}...")
+                            
+                            # Get the agent from session state
+                            agent = st.session_state.agent
+                            
+                            # Run the agent with streaming
+                            result: RunResultStreaming = Runner.run_streamed(
+                                agent, prompt, session=st.session_state.session_name
+                            )
+                            
+                            # Stream the response
+                            async for event in result.stream_events():
+                                if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+                                    if hasattr(event.data, 'delta') and event.data.delta:
+                                        full_response += event.data.delta
+                                        message_placeholder.markdown(full_response + "▌")
+                                        await asyncio.sleep(streaming_speed)
+                                    # elif hasattr(event.data, 'content') and event.data.content:
+                                    #     # Handle different event data structures
+                                    #     content = event.data.content
+                                    #     if isinstance(content, str):
+                                    #         full_response += content
+                                    #     elif hasattr(content, 'text'):
+                                    #         full_response += content.text
+                                    #     message_placeholder.markdown(full_response + "▌")
+                            
+                            # Final response without cursor
+                            if full_response and full_response.strip():
+                                message_placeholder.markdown(full_response)
+                                logger.info("Successfully generated streaming response")
+                            else:
+                                error_msg = "🚫 No response received. Please try again."
+                                message_placeholder.error(error_msg)
+                                full_response = error_msg
+                                logger.warning("Empty response received from agent")
+                            
+                        except asyncio.TimeoutError:
+                            logger.error("Request timed out")
+                            full_response = "⏱️ The request is taking longer than expected. Please try again with a simpler question."
+                            message_placeholder.error(full_response)
+                        except Exception as e:
+                            logger.error(f"Error during streaming: {str(e)}")
+                            full_response = ERROR_MESSAGES["processing_error"]
+                            message_placeholder.error(full_response)
+
+                    # Add assistant message to session state
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": full_response}
+                    )
+
+            except Exception as e:
+                logger.error(f"Error handling chat input: {str(e)}")
+                st.error(ERROR_MESSAGES["general_error"])
+
+    except Exception as e:
+        logger.error(f"Critical error in main function: {str(e)}")
+        st.error(ERROR_MESSAGES["general_error"])
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.error(f"Application failed to start: {str(e)}")
+        st.error(
+            "⚠️ The application failed to start. Please refresh the page and try again."
+        )
+        st.error(
+            "If the problem persists, please check your internet connection and API keys."
+        )
