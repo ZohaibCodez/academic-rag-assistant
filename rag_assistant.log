@@ -1,0 +1,11 @@
+2025-09-20 14:36:11,986 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2025-09-20 14:36:11,988 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-09-20 14:38:51,170 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+2025-09-20 14:38:56,257 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/traces/ingest "HTTP/1.1 204 No Content"
+2025-09-20 14:39:21,066 - openai._base_client - INFO - Retrying request to /chat/completions in 0.458073 seconds
+2025-09-20 14:39:22,377 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/traces/ingest "HTTP/1.1 204 No Content"
+2025-09-20 14:39:23,342 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+2025-09-20 14:39:26,299 - langchain.retrievers.multi_query - INFO - Generated queries: ['Explain the fundamental concepts and properties of linear systems.', 'Describe different methods for solving linear systems of equations.', 'What are the applications and real-world examples of linear systems?']
+2025-09-20 14:39:29,498 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/traces/ingest "HTTP/1.1 204 No Content"
+2025-09-20 14:39:43,699 - httpx - INFO - HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/openai/chat/completions "HTTP/1.1 200 OK"
+2025-09-20 14:39:46,918 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/traces/ingest "HTTP/1.1 204 No Content"

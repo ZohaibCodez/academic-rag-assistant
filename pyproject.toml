@@ -6,9 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "langchain>=0.3.27",
+    "langchain-community>=0.3.29",
     "langchain-google-genai>=2.1.12",
+    "langchain-huggingface>=0.3.1",
     "langchain-pinecone>=0.2.12",
     "openai-agents>=0.3.0",
+    "pinecone>=7.3.0",
     "python-dotenv>=1.1.1",
+    "sentence-transformers>=5.1.0",
     "streamlit>=1.49.1",
 ]
