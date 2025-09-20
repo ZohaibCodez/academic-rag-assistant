@@ -1,9 +1,17 @@
 import asyncio
+from datetime import datetime
 import os
-from agents import Agent, OpenAIChatCompletionsModel, Runner, function_tool
-from agents.memory import openai_conversations_session
+from agents import (
+    Agent,
+    OpenAIChatCompletionsModel,
+    Runner,
+    SQLiteSession,
+    function_tool,
+)
+from agents.memory import openai_conversations_session, session
 from dotenv import load_dotenv
 from langchain.retrievers import MultiQueryRetriever
+from langchain_core.messages import HumanMessage
 from langchain_core.prompts import PromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings  # Fixed: Use only one import
 from langchain_core.runnables import (
@@ -37,17 +45,6 @@ if not GOOGLE_API_KEY:
 if not PINECONE_API_KEY:
     raise ValueError("PINECONE_API_KEY environment variable is not set")
 
-# Initialize OpenAI client for Gemini
-external_client = AsyncOpenAI(
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    api_key=GOOGLE_API_KEY,
-)
-
-model = OpenAIChatCompletionsModel(
-    model="gemini-1.5-flash",
-    openai_client=external_client,
-)
-
 # Streamlit configuration
 st.set_page_config(
     page_title="Academic RAG Assistant",
@@ -62,55 +59,158 @@ st.markdown(
 <style>
 .main-header {
     font-size: 2.5rem;
-    color: #1f77b4;
+    color: #f6ad55;  /* Warm Gold */
     text-align: center;
     margin-bottom: 2rem;
     font-weight: bold;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.stHeading{
+text-align:center
 }
 
 .subject-badge {
-    padding: 0.5rem;
+    padding: 0.75rem;
     margin: 0.5rem 0;
-    background: linear-gradient(135deg, #e8eaf6 0%, #c5cae9 100%);
-    border-left: 4px solid #3f51b5;
-    border-radius: 6px;
-    border: 1px solid #c5e1a5;
-    color: black;
+    background: linear-gradient(135deg, #6b46c1 0%, #553c9a 100%);  /* Deep Purple gradient */
+    border-left: 4px solid #f6ad55;  /* Warm Gold border */
+    border-radius: 8px;
+    border: 1px solid #4c1d95;
+    color: white;  /* White text for contrast */
     font-weight: bold;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    transition: all 0.3s ease;
+}
+
+.subject-badge:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(246, 173, 85, 0.3);
+    cursor:pointer;
 }
 
 .chat-message {
     padding: 1rem;
     margin: 0.5rem 0;
-    border-radius: 10px;
+    border-radius: 12px;
 }
 
 .user-message {
-    background-color: #e3f2fd;
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);  /* Dark gradient */
     margin-left: 2rem;
+    border-left: 3px solid #f6ad55;  /* Gold accent */
+    color: white;
 }
 
 .assistant-message {
-    background-color: #f5f5f5;
+    background: linear-gradient(135deg, #374151 0%, #4b5563 100%);  /* Charcoal gradient */
     margin-right: 2rem;
+    border-left: 3px solid #6b46c1;  /* Purple accent */
+    color: white;
 }
 
 .thinking-animation {
-    color: #1f77b4;
+    color: #f6ad55;  /* Warm Gold */
     font-style: italic;
 }
 
-.footer {
-    position: fixed;
-    bottom: 0;
-    width: 100%;
+#chat-with-your-academic-assistant {
     text-align: center;
-    background: #f5f5f5;
-    padding: 10px;
-    font-size: 0.9rem;
-    color: #555;
-    border-top: 1px solid #ddd;
-    z-index: 1000;
+    color: #f6ad55;  /* Warm Gold */
+}
+
+/* Input field styling */
+.stChatInput > div > div > textarea {
+    background-color: #374151 !important;
+    border: 2px solid #4b5563 !important;
+    border-radius: 12px !important;
+    color: white !important;
+}
+
+.stChatInput > div > div > textarea:focus {
+    border-color: #f6ad55 !important;  /* Gold focus border */
+    box-shadow: 0 0 0 2px rgba(246, 173, 85, 0.2) !important;
+}
+
+/* Send button styling */
+.stChatInput button {
+    background-color: #f6ad55 !important;  /* Gold button */
+    border: none !important;
+    border-radius: 50% !important;
+    color: #1a202c !important;
+}
+
+.stChatInput button:hover {
+    background-color: #ed8936 !important;  /* Darker gold on hover */
+    transform: scale(1.02);
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background-color: #1a202c !important;  /* Dark navy sidebar */
+}
+
+/* Spinner color */
+.stSpinner > div {
+    border-top-color: #f6ad55 !important;  /* Gold spinner */
+}
+
+/* Success message */
+.stSuccess {
+    background-color: rgba(246, 173, 85, 0.1) !important;
+    border-left: 4px solid #f6ad55 !important;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0;
+    justify-content: center !important;
+    align-items: center !important;
+    width: 100% !important;
+    background-color: transparent !important;
+}
+
+/* Individual tab button styling */
+.stTabs [data-baseweb="tab"] {
+    flex: 1 !important;
+    text-align: center !important;
+    justify-content: center !important;
+    padding: 0.75rem 0.25rem !important;
+    min-width: 0 !important;
+    width: 33.33% !important;
+    background-color: #2d3748 !important;
+    border: none !important;
+    border-bottom: 3px solid #4a5568 !important;
+    color: #a0aec0 !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+}
+
+/* Tab button text */
+.stTabs [data-baseweb="tab"] > div {
+    text-align: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    color: inherit !important;
+}
+
+/* Active tab styling */
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    background-color: #374151 !important;
+    border-bottom-color: #ff6b35 !important;
+    color: #e2e8f0 !important;
+    font-weight: 600 !important;
+}
+
+/* Hover state for inactive tabs */
+.stTabs [data-baseweb="tab"]:hover:not([aria-selected="true"]) {
+    background-color: #374151 !important;
+    border-bottom-color: #ff8a65 !important;
+    color: #cbd5e0 !important;
+}
+
+svg{
+width:23px !important;
+height:23px !important;
 }
 </style>
 """,
@@ -122,6 +222,12 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "agent_initialized" not in st.session_state:
     st.session_state.agent_initialized = False
+if "session_name" not in st.session_state:
+    st.session_state.session_name = SQLiteSession("assistant_memory")
+if "vector_stores" not in st.session_state:
+    st.session_state.vector_stores = None
+if "retrievers" not in st.session_state:
+    st.session_state.retrievers = {}
 
 
 @st.cache_resource
@@ -178,264 +284,439 @@ def format_docs(retrieved_docs):
     return "\n\n".join(doc.page_content for doc in retrieved_docs)
 
 
-# Initialize vector stores and retrievers
-vector_stores = setup_vector_store()
-if not vector_stores:
-    st.error("Failed to initialize vector stores. Please check your configuration.")
-    st.stop()
+def initialize_retrievers_with_model(model_name):
+    """Initialize retrievers with the selected model"""
+    if st.session_state.vector_stores is None:
+        st.session_state.vector_stores = setup_vector_store()
 
-# Create retrievers
-try:
-    mmr_retriever_lin = vector_stores["linear_algebra"].as_retriever(
-        search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
-    )
+    if st.session_state.vector_stores is None:
+        return False
 
-    mmr_retriever_dis = vector_stores["discrete_structures"].as_retriever(
-        search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
-    )
-
-    mmr_retriever_cal = vector_stores["calculas_&_analytical_geometry"].as_retriever(
-        search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
-    )
-
-    multiquery_retriever_lin = MultiQueryRetriever.from_llm(
-        retriever=vector_stores["linear_algebra"].as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5, "namespace": "linear_algebra"},
-        ),
-        llm=GoogleGenerativeAI(model="gemini-1.5-flash"),
-    )
-
-    multiquery_retriever_dis = MultiQueryRetriever.from_llm(
-        retriever=vector_stores["discrete_structures"].as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3, "namespace": "discrete_structures"},
-        ),
-        llm=GoogleGenerativeAI(model="gemini-1.5-flash"),
-    )
-
-    multiquery_retriever_cal = MultiQueryRetriever.from_llm(
-        retriever=vector_stores["calculas_&_analytical_geometry"].as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3, "namespace": "calculas_&_analytical_geometry"},
-        ),
-        llm=GoogleGenerativeAI(model="gemini-1.5-flash"),
-    )
-
-    llm = GoogleGenerativeAI(model="gemini-1.5-flash")
-
-except Exception as e:
-    st.error(f"Failed to initialize retrievers: {str(e)}")
-    st.stop()
-
-
-@function_tool
-def answer_from_linear_algebra(query: str) -> str:
-    """
-    REQUIRED for ALL linear algebra questions including:
-    - Matrices, vectors, eigenvalues, determinants
-    - Linear transformations and vector spaces
-    - Systems of linear equations
-    - Matrix operations and properties
-    - Linear independence, basis, dimension
-    - Any question mentioning: matrix, vector, linear, eigen, determinant
-
-    Args:
-        query: The student's question about linear algebra
-
-    Returns:
-        Detailed answer from linear algebra textbook content
-    """
     try:
-        print(f"[Debug] answer_from_linear_algebra function call with query: {query}")
+        # Initialize LLM with selected model
+        llm = GoogleGenerativeAI(model=model_name)
 
-        parallel_chain = RunnableParallel(
-            {
-                "context": multiquery_retriever_lin | RunnableLambda(format_docs),
-                "question": RunnablePassthrough(),
-            }
-        )
-
-        prompt = PromptTemplate.from_template(
-            """
-            You are an expert professor of Linear Algebra. 
-
-            Context from textbook:
-            {context}
-
-            Student Question: {question}
-
-            Instructions:
-            - Use ONLY the information from the context above
-            - Provide clear, step-by-step explanations
-            - Include examples and definitions from the context
-            - If context lacks info, state clearly what's missing
-
-            Answer:
-            """,
-        )
-
-        parser = StrOutputParser()
-        main_chain = parallel_chain | prompt | llm | parser
-        result = main_chain.invoke(query)
-
-        print(f"[Debug] RAG function call with response: {result[:100]}...")
-        return result
-
+        # Create retrievers with the selected model
+        st.session_state.retrievers = {
+            "mmr_retriever_lin": st.session_state.vector_stores[
+                "linear_algebra"
+            ].as_retriever(
+                search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
+            ),
+            "mmr_retriever_dis": st.session_state.vector_stores[
+                "discrete_structures"
+            ].as_retriever(
+                search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
+            ),
+            "mmr_retriever_cal": st.session_state.vector_stores[
+                "calculas_&_analytical_geometry"
+            ].as_retriever(
+                search_type="mmr", search_kwargs={"k": 2, "lambda_mul": 0.7}
+            ),
+            "multiquery_retriever_lin": MultiQueryRetriever.from_llm(
+                retriever=st.session_state.vector_stores["linear_algebra"].as_retriever(
+                    search_type="similarity",
+                    search_kwargs={"k": 5, "namespace": "linear_algebra"},
+                ),
+                llm=llm,
+            ),
+            "multiquery_retriever_dis": MultiQueryRetriever.from_llm(
+                retriever=st.session_state.vector_stores[
+                    "discrete_structures"
+                ].as_retriever(
+                    search_type="similarity",
+                    search_kwargs={"k": 3, "namespace": "discrete_structures"},
+                ),
+                llm=llm,
+            ),
+            "multiquery_retriever_cal": MultiQueryRetriever.from_llm(
+                retriever=st.session_state.vector_stores[
+                    "calculas_&_analytical_geometry"
+                ].as_retriever(
+                    search_type="similarity",
+                    search_kwargs={
+                        "k": 3,
+                        "namespace": "calculas_&_analytical_geometry",
+                    },
+                ),
+                llm=llm,
+            ),
+            "llm": llm,
+        }
+        return True
     except Exception as e:
-        error_msg = f"Error in linear algebra query: {str(e)}"
-        print(f"[Error] {error_msg}")
-        return error_msg
+        st.error(f"Failed to initialize retrievers: {str(e)}")
+        return False
 
 
-@function_tool
-def answer_from_discrete_structures(query: str) -> str:
-    """
-    REQUIRED for ALL discrete mathematics questions including:
-    - Graph theory, trees, networks
-    - Sets, relations, functions (discrete context)
-    - Logic, proofs, mathematical induction
-    - Combinatorics, permutations, combinations
-    - Discrete probability and counting
-    - Any question mentioning: graph, set, proof, induction, discrete, combinatorics
+def create_function_tools(model_name):
+    """Create function tools with the selected model"""
 
-    Args:
-        query: The student's question about discrete structures
+    @function_tool
+    def answer_from_linear_algebra(query: str) -> str:
+        """
+        RAG tool for linear algebra
+        """
+        try:
+            print(
+                f"[Debug] answer_from_linear_algebra function call with query: {query}"
+            )
 
-    Returns:
-        Detailed answer from discrete structures textbook content
-    """
-    try:
-        print(
-            f"[Debug] answer_from_discrete_structures function call with query: {query}"
-        )
+            parallel_chain = RunnableParallel(
+                {
+                    "context": st.session_state.retrievers["multiquery_retriever_lin"]
+                    | RunnableLambda(format_docs),
+                    "question": RunnablePassthrough(),
+                }
+            )
 
-        parallel_chain = RunnableParallel(
-            {
-                "context": multiquery_retriever_dis | RunnableLambda(format_docs),
-                "question": RunnablePassthrough(),
-            }
-        )
+            prompt = PromptTemplate.from_template(
+                """
+                You are a helpful academic tutor helping a student with their coursework.
+                You have access to relevant sections from their course textbook.
 
-        prompt = PromptTemplate.from_template(
-            """
-            You are an expert professor of Discrete Structures. 
+                Course Material Context:
+                {context}
 
-            Context from textbook:
-            {context}
+                Student's Question: {question}
 
-            Student Question: {question}
+                Instructions:
+                - Answer the question using the provided course material context
+                - Explain concepts step-by-step in simple terms
+                - Include examples or analogies when helpful
+                - If the question asks for "steps" or "method", provide a clear numbered list
+                - If asking about general concepts (like "how to solve linear systems"), provide the standard method from the textbook
+                - For sample problems, create appropriate examples if none are in the context
+                - If the context is insufficient, provide what you can and mention what additional information might be helpful
 
-            Instructions:
-            - Use ONLY the information from the context above
-            - Provide clear, step-by-step explanations
-            - Include examples and definitions from the context
-            - If context lacks info, state clearly what's missing
+                Provide a clear, educational response:
+                """,
+            )
 
-            Answer:
-            """
-        )
+            parser = StrOutputParser()
+            main_chain = (
+                parallel_chain | prompt | st.session_state.retrievers["llm"] | parser
+            )
+            result = main_chain.invoke(query)
 
-        parser = StrOutputParser()
-        main_chain = parallel_chain | prompt | llm | parser
-        result = main_chain.invoke(query)
+            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            return result
 
-        print(f"[Debug] RAG function call with response: {result[:100]}...")
-        return result
+        except Exception as e:
+            error_msg = f"Error in linear algebra query: {str(e)}"
+            print(f"[Error] {error_msg}")
+            return error_msg
 
-    except Exception as e:
-        error_msg = f"Error in discrete structures query: {str(e)}"
-        print(f"[Error] {error_msg}")
-        return error_msg
+    @function_tool
+    def answer_from_discrete_structures(query: str) -> str:
+        """
+        RAG tool for discrete structures
+        """
+        try:
+            print(
+                f"[Debug] answer_from_discrete_structures function call with query: {query}"
+            )
 
+            parallel_chain = RunnableParallel(
+                {
+                    "context": st.session_state.retrievers["multiquery_retriever_dis"]
+                    | RunnableLambda(format_docs),
+                    "question": RunnablePassthrough(),
+                }
+            )
 
-@function_tool
-def answer_from_calana(query: str) -> str:
-    """
-    REQUIRED for ALL calculus and analytical geometry questions including:
-    - Derivatives, integrals, limits
-    - Continuous functions and continuity
-    - Optimization and critical points
-    - Series and sequences (calculus context)
-    - Analytical geometry and curves
-    - Any question mentioning: derivative, integral, limit, continuous, calculus
+            prompt = PromptTemplate.from_template(
+                """
+                You are a helpful academic tutor helping a student with their coursework.
+                You have access to relevant sections from their course textbook.
 
-    Args:
-        query: The student's question about calculus/analytical geometry
+                Course Material Context:
+                {context}
 
-    Returns:
-        Detailed answer from calculus textbook content
-    """
-    try:
-        print(f"[Debug] answer_from_calana function call with query: {query}")
+                Student's Question: {question}
 
-        parallel_chain = RunnableParallel(
-            {
-                "context": multiquery_retriever_cal | RunnableLambda(format_docs),
-                "question": RunnablePassthrough(),
-            }
-        )
+                Instructions:
+                - Answer the question using the provided course material context
+                - Explain concepts step-by-step in simple terms
+                - Include examples or analogies when helpful
+                - If the question asks for "steps" or "method", provide a clear numbered list
+                - If asking about general concepts (like "how to solve linear systems"), provide the standard method from the textbook
+                - For sample problems, create appropriate examples if none are in the context
+                - If the context is insufficient, provide what you can and mention what additional information might be helpful
 
-        prompt = PromptTemplate.from_template(
-            """
-            You are an expert professor of Calculas & Analytical Geometry. 
+                Provide a clear, educational response:
+                """
+            )
 
-            Context from textbook:
-            {context}
+            parser = StrOutputParser()
+            main_chain = (
+                parallel_chain | prompt | st.session_state.retrievers["llm"] | parser
+            )
+            result = main_chain.invoke(query)
 
-            Student Question: {question}
+            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            return result
 
-            Instructions:
-            - Use ONLY the information from the context above
-            - Provide clear, step-by-step explanations
-            - Include examples and definitions from the context
-            - If context lacks info, state clearly what's missing
+        except Exception as e:
+            error_msg = f"Error in discrete structures query: {str(e)}"
+            print(f"[Error] {error_msg}")
+            return error_msg
 
-            Answer:
-            """
-        )
+    @function_tool
+    def answer_from_calana(query: str) -> str:
+        """
+        RAG tool for calculas and analytical geometry
+        """
+        try:
+            print(f"[Debug] answer_from_calana function call with query: {query}")
 
-        parser = StrOutputParser()
-        main_chain = parallel_chain | prompt | llm | parser
-        result = main_chain.invoke(query)
+            parallel_chain = RunnableParallel(
+                {
+                    "context": st.session_state.retrievers["multiquery_retriever_cal"]
+                    | RunnableLambda(format_docs),
+                    "question": RunnablePassthrough(),
+                }
+            )
 
-        print(f"[Debug] RAG function call with response: {result[:100]}...")
-        return result
+            prompt = PromptTemplate.from_template(
+                """
+                You are a helpful academic tutor helping a student with their coursework.
+                You have access to relevant sections from their course textbook.
 
-    except Exception as e:
-        error_msg = f"Error in calculus query: {str(e)}"
-        print(f"[Error] {error_msg}")
-        return error_msg
+                Course Material Context:
+                {context}
 
+                Student's Question: {question}
 
-# Initialize agent
-agent = Agent(
-    name="Academic RAG Assistant",
-    instructions="""You are an academic assistant. 
-    For every user query:
-    - Always decide the subject (Linear Algebra, Discrete Structures, or Calculus).
-    - Always call the matching tool.
-    - Never answer directly without a tool.
-    - If a prompt you think given by a user dont well aligned and not better for retrieval of contents from vector db, Redefine user's query on your own way and then pass to your tools
-    """,
-    tools=[
+                Instructions:
+                - Answer the question using the provided course material context
+                - Explain concepts step-by-step in simple terms
+                - Include examples or analogies when helpful
+                - If the question asks for "steps" or "method", provide a clear numbered list
+                - If asking about general concepts (like "how to solve linear systems"), provide the standard method from the textbook
+                - For sample problems, create appropriate examples if none are in the context
+                - If the context is insufficient, provide what you can and mention what additional information might be helpful
+
+                Provide a clear, educational response:
+                """
+            )
+
+            parser = StrOutputParser()
+            main_chain = (
+                parallel_chain | prompt | st.session_state.retrievers["llm"] | parser
+            )
+            result = main_chain.invoke(query)
+
+            print(f"[Debug] RAG function call with response: {result[:100]}...")
+            return result
+
+        except Exception as e:
+            error_msg = f"Error in calculus query: {str(e)}"
+            print(f"[Error] {error_msg}")
+            return error_msg
+
+    return [
         answer_from_linear_algebra,
         answer_from_discrete_structures,
         answer_from_calana,
-    ],
-    model=model,
-)
+    ]
+
+
+def agent_initialization(model_name, _api_key):
+    """Initialize agent with the selected model"""
+    try:
+        # Initialize OpenAI client for Gemini
+        external_client = AsyncOpenAI(
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            api_key=_api_key,
+        )
+
+        model = OpenAIChatCompletionsModel(
+            model=model_name,
+            openai_client=external_client,
+        )
+
+        # Get function tools for the selected model
+        tools = create_function_tools(model_name)
+
+        # Initialize agent
+        agent = Agent(
+            name="Academic RAG Assistant",
+            instructions="""
+            You are an Expert Academic Assistant built on top of an Agentic RAG system. 
+            Your role is to help students by answering their questions using their course books 
+            through the retrieval tools provided.
+
+            TOOLS AVAILABLE:
+            - answer_from_linear_algebra(query)
+            - answer_from_discrete_structures(query)
+            - answer_from_calana(query) [for calculus & analytical geometry]
+
+            WORKFLOW:
+            1. When you receive a student query, first REFORMULATE and ENHANCE it into a more detailed, 
+            academic-style question that will get better results from the RAG system.
+
+            2. Identify which subject it likely belongs to:
+            * Linear Algebra (matrices, vectors, systems of equations, eigenvalues, determinants, etc.)
+            * Discrete Structures (logic, sets, graphs, combinatorics, proofs, etc.)
+            * Calculus & Analytical Geometry (derivatives, integrals, limits, geometry, etc.)
+            
+            3. IMMEDIATELY use the appropriate tool with your ENHANCED query - don't ask for clarification first.
+            
+            4. If unsure about the subject, try the most likely tool first, then others if needed.
+            
+            5. Present the tool's response in a clear, student-friendly manner.
+
+            QUERY ENHANCEMENT EXAMPLES:
+            - "Tell me steps to solve a linear system" → "What are the detailed steps to solve a system of linear equations? Include methods like Gaussian elimination or substitution method with examples."
+            - "derivatives" → "How do you find derivatives? What are the rules and methods for differentiation with step-by-step examples?"
+            - "what is matrix" → "What is a matrix in linear algebra? Explain the definition, types, basic operations, and provide examples."
+            - "prove by induction" → "How do you write a proof by mathematical induction? What are the steps and structure with examples?"
+
+            IMPORTANT RULES:
+            - Always ENHANCE short/vague queries into detailed, specific questions before using tools
+            - Make queries more academic and comprehensive to get better RAG results
+            - Include requests for examples, steps, definitions as appropriate
+            - Don't ask for book titles or authors - the tools access the student's course books
+            - Be proactive in helping with enhanced queries, not reactive in asking questions
+            """,
+            tools=tools,
+            model=model,
+        )
+
+        return agent
+    except Exception as e:
+        st.error(f"Failed to initialize agent: {str(e)}")
+        return None
 
 
 async def get_agent_response(agent, query: str) -> str:
     """Get response from agent with error handling"""
     try:
-        result = await Runner.run(agent, query)
+        result = await Runner.run(agent, query, session=st.session_state.session_name)
         return result.final_output
     except Exception as e:
         error_msg = f"Sorry, I encountered an error: {str(e)}"
         print(f"[Error] {error_msg}")
         return error_msg
+
+
+def handle_sidebar():
+    with st.sidebar:
+        st.header("🔑 Study Assistant")
+
+        # Create tabs
+        tab1, tab2, tab3 = st.tabs(["⚙️ Config", "📚 Subjects", "📊 Info"])
+
+        # Configuration Tab
+        with tab1:
+            api_key = st.text_input(
+                "Your Google Gemini API Key",
+                type="password",
+                placeholder="Enter your API key...",
+                help="Your key is kept only in your current browser session.",
+                value=st.session_state.get("api_key", ""),
+            )
+            if api_key:
+                st.session_state.api_key = api_key
+                if len(api_key) < 20:
+                    st.error("⚠️ This API key looks too short. Please check it.")
+                elif not api_key.startswith("AIza"):
+                    st.warning(
+                        "⚠️ This doesn't look like a Google API key. Double-check it."
+                    )
+                else:
+                    os.environ["GOOGLE_API_KEY"] = api_key
+                    st.success("✅ API key set for this session")
+            else:
+                st.info("💡 Enter your API key to start chatting")
+
+            st.divider()
+
+            selected_model = st.selectbox(
+                "Generation Models",
+                [
+                    "gemini-2.5-pro",
+                    "gemini-2.5-flash",
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.5-flash-image-preview",
+                    "gemini-live-2.5-flash-preview",
+                    "gemini-2.0-flash",
+                    "gemini-2.0-flash-lite",
+                    "gemini-2.0-flash-001",
+                    "gemini-2.0-flash-lite-001",
+                    "gemini-2.0-flash-live-001",
+                    "gemini-2.0-flash-live-preview-04-09",
+                    "gemini-2.0-flash-preview-image-generation",
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                ],
+                index=0,
+                help="Choose the Gemini model for generation",
+            )
+            st.session_state.model = selected_model
+
+            # Reset agent if model changed
+            if "previous_model" not in st.session_state:
+                st.session_state.previous_model = selected_model
+            elif st.session_state.previous_model != selected_model:
+                st.session_state.agent_initialized = False
+                st.session_state.previous_model = selected_model
+
+        # Subjects Tab
+        with tab2:
+            subjects = [
+                "Linear Algebra",
+                "Discrete Structures",
+                "Calculus & Analytical Geometry",
+            ]
+
+            st.write("**Available Subjects:**")
+            for subject in subjects:
+                st.markdown(
+                    f'<div class="subject-badge">📖 {subject}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.divider()
+            st.subheader("ℹ️ How to use")
+            st.write("1. Ask questions about your course material")
+            st.write("2. The assistant will search relevant textbooks")
+            st.write("3. Get detailed explanations with examples")
+
+        # Session Info Tab
+        with tab3:
+            message_count = (
+                len(st.session_state.messages) - 1
+                if st.session_state.get("messages")
+                else 0
+            )
+
+            st.metric("Messages", message_count)
+            st.info(f"**Current Model:**\n{selected_model}")
+
+            if message_count > 0:
+                st.divider()
+                chat_text = ""
+                for msg in st.session_state.messages:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    chat_text += f"{role}: {msg['content']}\n\n"
+
+                st.download_button(
+                    "📥 Download Chat",
+                    chat_text,
+                    f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    "text/plain",
+                    use_container_width=True,
+                    help="Download your conversation history",
+                )
+
+            # st.divider()
+            if st.button("🗑️ Clear Chat", use_container_width=True):
+                st.session_state.messages = []
+                st.rerun()
+
+    return selected_model, st.session_state.get("api_key")
 
 
 def main():
@@ -444,30 +725,12 @@ def main():
         '<h1 class="main-header">🎓 Academic RAG Assistant</h1>', unsafe_allow_html=True
     )
 
-    # Sidebar
-    with st.sidebar:
-        st.header("📚 Available Subjects")
-
-        subjects = [
-            "Linear Algebra",
-            "Discrete Structures",
-            "Calculus & Analytical Geometry",
-        ]
-        for subject in subjects:
-            st.markdown(
-                f'<div class="subject-badge">📖 {subject}</div>', unsafe_allow_html=True
-            )
-
-        st.markdown("---")
-        st.subheader("ℹ️ How to use")
-        st.write("1. Ask questions about your course material")
-        st.write("2. The assistant will search relevant textbooks")
-        st.write("3. Get detailed explanations with examples")
-
-        st.markdown("---")
-        if st.button("🗑️ Clear Chat"):
-            st.session_state.messages = []
-            st.rerun()
+    selected_model, user_api_key = handle_sidebar()
+    chat_model = None
+    if user_api_key and selected_model:
+        # Ensure env var is set for the underlying client
+        os.environ["GOOGLE_API_KEY"] = user_api_key
+        chat_model = selected_model
 
     # Main chat interface
     st.subheader("💬 Chat with your Academic Assistant")
@@ -477,19 +740,34 @@ def main():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Initialize agent (this happens once)
+    if chat_model is None:
+        st.warning(
+            "Please enter your Google Gemini API key in the sidebar to start chatting."
+        )
+        return
+
+    # Initialize retrievers and agent
     if not st.session_state.agent_initialized:
         with st.spinner("Initializing Academic Assistant..."):
-            if agent:
-                st.session_state.agent = agent
-                st.session_state.agent_initialized = True
-                st.success("✅ Academic Assistant ready!")
+            # Initialize retrievers with selected model
+            if initialize_retrievers_with_model(chat_model):
+                # Initialize agent with selected model
+                agent = agent_initialization(chat_model, user_api_key)
+                if agent:
+                    st.session_state.agent = agent
+                    st.session_state.agent_initialized = True
+                    st.success("✅ Academic Assistant ready!")
+                else:
+                    st.error("❌ Failed to initialize assistant")
+                    return
             else:
-                st.error("❌ Failed to initialize assistant")
+                st.error("❌ Failed to initialize retrievers")
                 return
 
     # Chat input
-    if prompt := st.chat_input("Ask me anything about your courses..."):
+    if prompt := st.chat_input(
+        "Ask me anything about your courses...", disabled=chat_model is None
+    ):
         # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
 
@@ -515,12 +793,6 @@ def main():
         )
 
         st.rerun()
-
-    # Footer
-    st.markdown(
-        '<div class="footer">🎓 Academic RAG Assistant | Built with ❤️ using Streamlit</div>',
-        unsafe_allow_html=True,
-    )
 
 
 if __name__ == "__main__":

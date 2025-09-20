@@ -12,6 +12,7 @@ dependencies = [
     "langchain-pinecone>=0.2.12",
     "openai-agents>=0.3.0",
     "pinecone>=7.3.0",
+    "plotly>=6.3.0",
     "python-dotenv>=1.1.1",
     "sentence-transformers>=5.1.0",
     "streamlit>=1.49.1",
