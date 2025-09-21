@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 import streamlit as st
 from langchain_core.output_parsers import StrOutputParser
+from agents import set_tracing_disabled
 
 
 # Configure logging
@@ -74,6 +75,13 @@ ERROR_MESSAGES = {
 
 load_dotenv()
 
+# Handle OpenAI API key for tracing (optional)
+# If OpenAI API key is not provided in .env, disable tracing to prevent errors
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    # Disable OpenAI tracing when no API key is provided
+    set_tracing_disabled(True)
+
 # Handle event loop for async operations
 try:
     asyncio.get_running_loop()
@@ -83,7 +91,10 @@ except RuntimeError:
 
 # Environment variables
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+try:
+    PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+except:
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 
 # Validate API keys with better error handling
@@ -885,24 +896,31 @@ async def main():
                     with st.spinner("🤔 Thinking and searching through textbooks..."):
                         message_placeholder = st.empty()
                         full_response = ""
-                        
+
                         try:
                             logger.info(f"Processing query: {prompt[:100]}...")
-                            
+
                             # Get the agent from session state
                             agent = st.session_state.agent
-                            
+
                             # Run the agent with streaming
                             result: RunResultStreaming = Runner.run_streamed(
                                 agent, prompt, session=st.session_state.session_name
                             )
-                            
+
                             # Stream the response
                             async for event in result.stream_events():
-                                if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
-                                    if hasattr(event.data, 'delta') and event.data.delta:
+                                if event.type == "raw_response_event" and isinstance(
+                                    event.data, ResponseTextDeltaEvent
+                                ):
+                                    if (
+                                        hasattr(event.data, "delta")
+                                        and event.data.delta
+                                    ):
                                         full_response += event.data.delta
-                                        message_placeholder.markdown(full_response + "▌")
+                                        message_placeholder.markdown(
+                                            full_response + "▌"
+                                        )
                                         await asyncio.sleep(streaming_speed)
                                     # elif hasattr(event.data, 'content') and event.data.content:
                                     #     # Handle different event data structures
@@ -912,7 +930,7 @@ async def main():
                                     #     elif hasattr(content, 'text'):
                                     #         full_response += content.text
                                     #     message_placeholder.markdown(full_response + "▌")
-                            
+
                             # Final response without cursor
                             if full_response and full_response.strip():
                                 message_placeholder.markdown(full_response)
@@ -922,7 +940,7 @@ async def main():
                                 message_placeholder.error(error_msg)
                                 full_response = error_msg
                                 logger.warning("Empty response received from agent")
-                            
+
                         except asyncio.TimeoutError:
                             logger.error("Request timed out")
                             full_response = "⏱️ The request is taking longer than expected. Please try again with a simpler question."
@@ -931,11 +949,13 @@ async def main():
                             logger.error(f"Error during streaming: {str(e)}")
                             full_response = ERROR_MESSAGES["processing_error"]
                             message_placeholder.error(full_response)
+                        # st.rerun()
 
                     # Add assistant message to session state
                     st.session_state.messages.append(
                         {"role": "assistant", "content": full_response}
                     )
+                    st.rerun()
 
             except Exception as e:
                 logger.error(f"Error handling chat input: {str(e)}")
