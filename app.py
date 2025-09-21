@@ -30,7 +30,8 @@ from openai import AsyncOpenAI
 from openai.types.responses import ResponseTextDeltaEvent
 import streamlit as st
 from langchain_core.output_parsers import StrOutputParser
-from agents import set_tracing_disabled
+
+# No additional imports needed for tracing control
 
 
 # Configure logging
@@ -75,13 +76,6 @@ ERROR_MESSAGES = {
 
 load_dotenv()
 
-# Handle OpenAI API key for tracing (optional)
-# If OpenAI API key is not provided in .env, disable tracing to prevent errors
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    # Disable OpenAI tracing when no API key is provided
-    set_tracing_disabled(True)
-
 # Handle event loop for async operations
 try:
     asyncio.get_running_loop()
@@ -95,6 +89,19 @@ try:
     PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 except:
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+
+# Handle OpenAI API key for tracing (optional)
+# If OpenAI API key is not provided in .env, disable tracing to prevent errors
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except KeyError:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    # Disable OpenAI tracing when no API key is provided
+    os.environ["OPENAI_TRACING_ENABLED"] = "false"
+    os.environ["OPENAI_API_KEY"] = "dummy-key"  # Required to prevent 401 errors
+    logger.info("OpenAI API key not found - tracing disabled")
 
 
 # Validate API keys with better error handling
@@ -408,7 +415,7 @@ def initialize_retrievers_with_model(model_name: str) -> bool:
             "multiquery_retriever_lin": MultiQueryRetriever.from_llm(
                 retriever=st.session_state.vector_stores["linear_algebra"].as_retriever(
                     search_type="similarity",
-                    search_kwargs={"k": 5, "namespace": "linear_algebra"},
+                    search_kwargs={"k": 2, "namespace": "linear_algebra"},
                 ),
                 llm=llm,
             ),
@@ -417,7 +424,7 @@ def initialize_retrievers_with_model(model_name: str) -> bool:
                     "discrete_structures"
                 ].as_retriever(
                     search_type="similarity",
-                    search_kwargs={"k": 3, "namespace": "discrete_structures"},
+                    search_kwargs={"k": 2, "namespace": "discrete_structures"},
                 ),
                 llm=llm,
             ),
@@ -427,7 +434,7 @@ def initialize_retrievers_with_model(model_name: str) -> bool:
                 ].as_retriever(
                     search_type="similarity",
                     search_kwargs={
-                        "k": 3,
+                        "k": 2,
                         "namespace": "calculas_&_analytical_geometry",
                     },
                 ),
